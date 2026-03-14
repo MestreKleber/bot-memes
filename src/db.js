@@ -4,24 +4,36 @@ const path = require('path');
 const db = new Database(path.join(__dirname, '../data/bot.db'));
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS players (
-    id TEXT PRIMARY KEY,
-    name TEXT,
+  -- tabelas existentes...
+
+  CREATE TABLE IF NOT EXISTS frases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id TEXT NOT NULL,
+    player_id TEXT NOT NULL,
+    alias TEXT,
+    texto TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-
-  CREATE TABLE IF NOT EXISTS group_players (
-    player_id TEXT NOT NULL,
-    group_id TEXT NOT NULL,
-    alias TEXT,
-    balance INTEGER DEFAULT 0,
-    PRIMARY KEY (player_id, group_id),
-    FOREIGN KEY (player_id) REFERENCES players(id)
-  );
-
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_group
-    ON group_players(group_id, alias);
 `);
+
+function addFrase(groupId, playerId, alias, texto) {
+  db.prepare(
+    'INSERT INTO frases (group_id, player_id, alias, texto) VALUES (?, ?, ?, ?)'
+  ).run(groupId, playerId, alias || playerId.replace('@c.us', ''), texto);
+}
+
+function getRandomFrase(groupId) {
+  return db.prepare(
+    'SELECT * FROM frases WHERE group_id = ? ORDER BY RANDOM() LIMIT 1'
+  ).get(groupId);
+}
+
+function listFrases(groupId) {
+  return db.prepare(
+    'SELECT * FROM frases WHERE group_id = ? ORDER BY created_at DESC'
+  ).all(groupId);
+}
+
 
 function getPlayer(playerId, groupId, name) {
   let player = db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
@@ -83,5 +95,4 @@ function listGroupPlayers(groupId) {
     ORDER BY gp.balance DESC
   `).all(groupId);
 }
-
-module.exports = { getPlayer, getPlayerByAlias, updateBalance, setAlias, listGroupPlayers };
+module.exports = { getPlayer, getPlayerByAlias, updateBalance, setAlias, listGroupPlayers, addFrase, getRandomFrase, listFrases };
