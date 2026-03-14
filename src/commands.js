@@ -3,7 +3,7 @@ const { isOnCooldown, setCooldown, getRemainingTime } = require('./cooldown');
 const config = require('./config');
 
 function displayName(player) {
-  return player.alias || player.id.replace('@c.us', '');
+  return player.alias || (player.id || player.player_id).replace('@c.us', '');
 }
 
 const commands = {
