@@ -49,7 +49,7 @@ const commands = {
     updateBalance(msg.author, msg.from, earned);
     setCooldown(msg.author, 'trabalhar');
 
-    if (Math.random() < 0.1) {
+    if (Math.random() < 0.4) {
       const frase = getRandomFrase(msg.from);
       if (frase) {
         const delay = Math.floor(Math.random() * (30 - 3 + 1) + 3) * 60 * 1000;
