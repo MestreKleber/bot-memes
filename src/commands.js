@@ -367,6 +367,33 @@ const commands = {
     );
   },
 
+  async status(msg, args) {
+    let player;
+
+    if (!args.length) {
+      const contact = await msg.getContact();
+      player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    } else {
+      const targetAlias = args.join(' ');
+      player = getPlayerByAlias(msg.from, targetAlias);
+      if (!player) {
+        return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
+      }
+    }
+
+    const nome = displayName(player);
+    const saldo = Number(player.balance ?? 0);
+    const reputacao = Number(player.reputacao ?? 50);
+    const cargo = player.cargo || 'empacotador';
+
+    return msg.reply(
+      `*Status de ${nome}*\n` +
+      `Saldo: R$${saldo}\n` +
+      `Reputação: ${reputacao}\n` +
+      `Cargo: ${cargo}`
+    );
+  },
+
   async lutar(msg, args) {
     const cd = config.cooldowns.lutar;
     if (isOnCooldown(msg.author, 'lutar', cd))
@@ -759,6 +786,9 @@ commands.transferir = commands.pix;
 commands.doar = commands.pix;
 commands.comandos = commands.ajuda;
 commands.help = commands.ajuda;
+commands.perfil = commands.status;
+commands.reputação = commands.status;
+commands.reputacao = commands.status;
 
 
 module.exports = commands;
