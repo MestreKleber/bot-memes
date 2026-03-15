@@ -54,6 +54,47 @@ const RUMORES = [
   'Dizem que [pessoa] se meteu numa fria e tá esperando o problema sumir sozinho',
 ];
 
+const PASSEAR_MSG_NADA = [
+  'Você andou, viu uns pombos, voltou pra casa.',
+];
+
+const PASSEAR_MSG_ENCONTRO_CUMPRIMENTO = [
+  '[X] e [Y] se encontraram na rua. Acenaram com a cabeça sem parar nem falar nada.',
+  '[X] viu [Y] de longe e gritou o nome. [Y] acenou. Os dois continuaram andando.',
+  "[X] e [Y] se esbarraram, disseram 'oi' ao mesmo tempo e ficaram em silêncio por 3 segundos constrangedores.",
+  "[X] perguntou pra [Y] como tava. [Y] disse 'tudo bem e você'. [X] disse 'tudo bem'. Ninguém perguntou nada mais.",
+  '[X] e [Y] se encontraram e ficaram 5 minutos falando de clima.',
+];
+
+const PASSEAR_MSG_ENCONTRO_EVITAR = [
+  '[X] viu [Y] na calçada e de repente ficou muito interessado no próprio celular.',
+  '[Y] passou do lado de [X] olhando pro chão. [X] também olhou pro chão. Os dois fingiram muito bem.',
+  '[X] entrou numa loja que não queria entrar só pra evitar [Y].',
+  '[Y] atravessou a rua quando viu [X] vindo. [X] fingiu não perceber.',
+];
+
+const PASSEAR_MSG_ENCONTRO_BRIGA = [
+  '[X] e [Y] se encontraram e em 30 segundos já estavam discutindo. Em 1 minuto, porrada.',
+  '[X] olhou torto pra [Y]. [Y] não gostou. A rua inteira parou pra assistir.',
+  '[X] e [Y] brigaram por um motivo que nenhum dos dois lembra direito. Vizinhos aplaudiram.',
+];
+
+const PASSEAR_MSG_LADRAO_RECONHECIDO = [
+  'Um suspeito se aproximou, olhou nos seus olhos e foi embora sem falar nada.',
+  'Alguém tentou mexer no seu bolso, percebeu quem você era e desistiu na hora.',
+];
+
+const PASSEAR_MSG_LENDARIO = [
+  'Uma velhinha te parou na rua, não sabia quem você era mas achou sua cara honesta e te deu R$[valor].',
+  'Um moleque pediu seu autógrafo. Você assinou. Ganhou R$[valor] de vergonha alheia.',
+  'Nossa, você é famoso aqui no bairro! O padeiro te deu um pão de queijo e R$[valor] de troco.',
+];
+
+const PASSEAR_MSG_SUSPEITO = [
+  'Você saiu na rua e as pessoas atravessaram a calçada pra te evitar.',
+  'Uma criança apontou pra você e perguntou pra mãe quem era. A mãe disse pra não olhar.',
+];
+
 const LUTA_FLAVOR_VITORIA = [
   '⚔️ [vencedor] partiu pra cima de [perdedor] sem hesitar e saiu ileso.',
   '⚔️ [vencedor] encostou uma vez só em [perdedor]. Foi suficiente.',
@@ -242,6 +283,76 @@ const commands = {
       `*${displayName(player)}* trabalhou como *${cargoAtual.nome}* e ganhou R$${earned}.\n` +
       `${cargoAtual.flavor}`
     );
+  },
+
+  async passear(msg) {
+    const cd = config.cooldowns.trabalhar;
+    if (isOnCooldown(msg.author, 'passear', cd)) {
+      return msg.reply(`Aguarde ${getRemainingTime(msg.author, 'passear', cd)}s para passear de novo.`);
+    }
+
+    const contact = await msg.getContact();
+    const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const nomeAutor = displayName(player);
+
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const roll = Math.random() * 100;
+
+    setCooldown(msg.author, 'passear');
+
+    if (roll < 25) {
+      return msg.reply(pick(PASSEAR_MSG_NADA));
+    }
+
+    if (roll < 50) {
+      const valor = Math.floor(Math.random() * 100) + 1;
+      updateBalance(msg.author, msg.from, valor);
+      return msg.reply(`💰 ${nomeAutor} achou R$${valor} no caminho.`);
+    }
+
+    if (roll < 70) {
+      const players = listGroupPlayers(msg.from).filter((p) => p.id !== msg.author);
+      if (!players.length) {
+        return msg.reply(pick(PASSEAR_MSG_NADA));
+      }
+
+      const outro = players[Math.floor(Math.random() * players.length)];
+      const nomeOutro = displayName(outro);
+      const subRoll = Math.random() * 100;
+
+      let template;
+      if (subRoll < 80) template = pick(PASSEAR_MSG_ENCONTRO_CUMPRIMENTO);
+      else if (subRoll < 90) template = pick(PASSEAR_MSG_ENCONTRO_EVITAR);
+      else template = pick(PASSEAR_MSG_ENCONTRO_BRIGA);
+
+      const texto = template.replaceAll('[X]', nomeAutor).replaceAll('[Y]', nomeOutro);
+      return msg.reply(texto);
+    }
+
+    if (roll < 85) {
+      const classe = player.classe || 'trabalhador';
+      if (classe === 'ladrao') {
+        return msg.reply(pick(PASSEAR_MSG_LADRAO_RECONHECIDO));
+      }
+
+      const valor = Math.floor(Math.random() * (200 - 10 + 1)) + 10;
+      updateBalance(msg.author, msg.from, -valor);
+      return msg.reply(`🕵️ ${nomeAutor} vacilou na rua e perdeu R$${valor}.`);
+    }
+
+    const reputacao = Number(player.reputacao ?? 50);
+    if (reputacao >= 81) {
+      const valor = Math.floor(Math.random() * (500 - 100 + 1)) + 100;
+      updateBalance(msg.author, msg.from, valor);
+      const texto = pick(PASSEAR_MSG_LENDARIO).replace('[valor]', String(valor));
+      return msg.reply(texto);
+    }
+
+    if (reputacao <= 20) {
+      return msg.reply(pick(PASSEAR_MSG_SUSPEITO));
+    }
+
+    return msg.reply('Você deu uma volta, mas hoje sua reputação não chamou atenção de ninguém.');
   },
 
 
@@ -596,6 +707,7 @@ const commands = {
       `${p}cargo <classe> - Troca sua classe\n\n` +
       `*Economia*\n` +
       `${p}trabalhar - Ganhe dinheiro (cooldown: 10min)\n` +
+      `${p}passear - Dê uma volta pelo bairro (cooldown: 10min)\n` +
       `${p}lutar <nome> - Lute contra alguém (cooldown: 1min)\n` +
       `${p}roubar <nome> - Tente roubar alguém (cooldown: 2min)\n` +
       `${p}rumor @pessoa - Espalha um rumor (custo: R$50)\n` +
@@ -637,6 +749,9 @@ const commands = {
 
 commands.usuários = commands.usuarios;
 commands.ranking = commands.usuarios;
+commands.passeio = commands.passear;
+commands.andar = commands.passear;
+commands.explorar = commands.passear;
 commands.brigar = commands.lutar;
 commands.bater = commands.lutar;
 commands.espancar = commands.lutar;
