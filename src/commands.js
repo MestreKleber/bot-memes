@@ -1,9 +1,147 @@
-const { getPlayer, getPlayerByAlias, updateBalance, setAlias, listGroupPlayers, addFrase, getRandomFrase, listFrases } = require('./db');
+const {
+  getPlayer,
+  getPlayerByAlias,
+  updateBalance,
+  incrementarTrabalhos,
+  setCargo,
+  resetTrabalhosECargo,
+  setClasse,
+  setCooldownClasse,
+  incrementarVitoriasLuta,
+  setLadraoDesbloqueado,
+  setAssassinoDesbloqueado,
+  setCooldownRumorEnviou,
+  setCooldownRumorRecebeu,
+  setMortoAte,
+  setPresoAte,
+  alterarReputacao,
+  getFaixaReputacao,
+  setAlias,
+  listGroupPlayers,
+  addFrase,
+  getRandomFrase,
+  listFrases,
+} = require('./db');
 const { isOnCooldown, setCooldown, getRemainingTime } = require('./cooldown');
 const config = require('./config');
 
 function displayName(player) {
   return player.alias || (player.id || player.player_id).replace('@c.us', '');
+}
+
+const ASSAI_CARGOS = [
+  { nome: 'empacotador', trabalhosMin: 0, reputacaoMin: 0, bonus: 0, flavor: 'Você embalou compras de estranhos por horas. Seus dedos doem.' },
+  { nome: 'repositor', trabalhosMin: 3, reputacaoMin: 45, bonus: 0.2, flavor: 'Você empilhou caixa de óleo até a coluna reclamar.' },
+  { nome: 'caixa', trabalhosMin: 6, reputacaoMin: 50, bonus: 0.4, flavor: 'Você digitou código de banana 38 vezes seguidas.' },
+  { nome: 'açougueiro', trabalhosMin: 12, reputacaoMin: 55, bonus: 0.65, flavor: 'Você desossou meia vaca com maestria duvidosa.' },
+  { nome: 'supervisor', trabalhosMin: 15, reputacaoMin: 65, bonus: 0.9, flavor: 'Você ficou de braço cruzado supervisionando os outros.' },
+  { nome: 'empilhadeira', trabalhosMin: 20, reputacaoMin: 75, bonus: 1.2, flavor: 'Você quase derrubou uma prateleira inteira mas ninguém viu.' },
+  { nome: 'gerente', trabalhosMin: 25, reputacaoMin: 85, bonus: 1.6, flavor: 'Você assinou três planilhas sem ler e tomou café o resto do dia.' },
+];
+
+function getCargoInfo(cargo) {
+  return ASSAI_CARGOS.find((c) => c.nome === cargo) || ASSAI_CARGOS[0];
+}
+
+const RUMORES = [
+  'Dizem que [pessoa] deve dinheiro pra metade do bairro e some quando cobram',
+  'Contam que [pessoa] foi visto saindo pela janela de casa às 3 da manhã',
+  'Todo mundo sabe que [pessoa] perdeu o emprego mas ainda faz questão de aparecer',
+  'Falaram que [pessoa] pegou dinheiro emprestado e nunca mais atendeu o telefone',
+  'Dizem que [pessoa] apanhou numa briga e ainda saiu pedindo desculpa',
+  'Vizinhos contam que [pessoa] passa o dia em casa mas diz que tá trabalhando',
+  'Comentaram que [pessoa] pediu dinheiro emprestado pro próprio pai e não pagou',
+  'Dizem que [pessoa] se meteu numa fria e tá esperando o problema sumir sozinho',
+];
+
+const LUTA_FLAVOR_VITORIA = [
+  '⚔️ [vencedor] partiu pra cima de [perdedor] sem hesitar e saiu ileso.',
+  '⚔️ [vencedor] encostou uma vez só em [perdedor]. Foi suficiente.',
+  '⚔️ [perdedor] subestimou [vencedor]. Erro clássico.',
+  '⚔️ [vencedor] não disse nada. Só olhou. [perdedor] já sabia o resultado.',
+  '⚔️ [perdedor] tentou correr. [vencedor] era mais rápido.',
+  '⚔️ [vencedor] saiu andando normal. [perdedor] ficou no chão pensando na vida.',
+];
+
+const LUTA_FLAVOR_DERROTA = [
+  '💀 [perdedor] achou que ia ganhar. Não foi o caso.',
+  '💀 [perdedor] acordou no chão sem saber bem o que aconteceu.',
+  '💀 [vencedor] nem suou. [perdedor] sim.',
+  '💀 [perdedor] vai fingir que isso nunca aconteceu.',
+  '💀 Testemunhas disseram que [perdedor] tentou. Com toda a certeza tentou.',
+  '💀 [perdedor] vai precisar de um tempo pra se recuperar disso.',
+];
+
+const ASSASSINO_MULTA = 200;
+const CONTRATO_DURACAO_MS = 2 * 60 * 60 * 1000;
+const activeContracts = new Map();
+
+function contratoKey(groupId, assassinoId) {
+  return `${groupId}:${assassinoId}`;
+}
+
+function clearContrato(groupId, assassinoId) {
+  const key = contratoKey(groupId, assassinoId);
+  const existing = activeContracts.get(key);
+  if (existing && existing.timeout) {
+    clearTimeout(existing.timeout);
+  }
+  activeContracts.delete(key);
+}
+
+function setContrato(groupId, assassinoId, contrato) {
+  clearContrato(groupId, assassinoId);
+  const timeout = setTimeout(() => {
+    clearContrato(groupId, assassinoId);
+  }, Math.max(0, contrato.expiraEm - Date.now()));
+  activeContracts.set(contratoKey(groupId, assassinoId), { ...contrato, timeout });
+}
+
+function getContratoAtivo(groupId, assassinoId) {
+  const key = contratoKey(groupId, assassinoId);
+  const contrato = activeContracts.get(key);
+  if (!contrato) return null;
+  if (Date.now() >= contrato.expiraEm) {
+    clearContrato(groupId, assassinoId);
+    return null;
+  }
+  return contrato;
+}
+
+function normalizeClasse(input) {
+  if (!input) return null;
+  const value = input.toLowerCase();
+  if (value === 'trabalhador') return 'trabalhador';
+  if (value === 'ladrao' || value === 'ladrão') return 'ladrao';
+  if (value === 'assassino') return 'assassino';
+  return null;
+}
+
+async function verificarDesbloqueios(msg, playerId, groupId) {
+  const player = getPlayer(playerId, groupId, '');
+  const nome = displayName(player);
+
+  const reputacao = Number(player.reputacao ?? 50);
+  const ladraoDesbloqueado = Number(player['ladrão_desbloqueado'] ?? 0);
+  if (reputacao < 35 && ladraoDesbloqueado === 0) {
+    setLadraoDesbloqueado(playerId, groupId, 1);
+    const chat = await msg.getChat();
+    await chat.sendMessage(
+      `${nome} foi contatado por alguém suspeito no beco atrás do Assaí Atacadista. ` +
+      'Ele oferece uma vida diferente. Digite !cargo ladrão pra mudar de vida.'
+    );
+  }
+
+  const vitorias = Number(player.vitorias_luta ?? 0);
+  const assassinoDesbloqueado = Number(player.assassino_desbloqueado ?? 0);
+  if (vitorias >= 10 && assassinoDesbloqueado === 0) {
+    setAssassinoDesbloqueado(playerId, groupId, 1);
+    const chat = await msg.getChat();
+    await chat.sendMessage(
+      `${nome}, seu trabalho chamou atenção de pessoas importantes. ` +
+      'Há uma proposta esperando por você. Digite !cargo assassino pra mudar de vida.'
+    );
+  }
 }
 
 const commands = {
@@ -44,10 +182,46 @@ const commands = {
 
     const contact = await msg.getContact();
     const player = getPlayer(msg.author, msg.from, contact.pushname || '');
-    const earned = Math.floor(Math.random() * 151) + 50;
+    const classe = player.classe || 'trabalhador';
+    if (classe !== 'trabalhador') {
+      return msg.reply('Apenas quem é da classe trabalhador pode usar !trabalhar.');
+    }
+
+    const baseEarned = Math.floor(Math.random() * 151) + 50;
+    const cargoAtualNome = classe === 'trabalhador' ? (player.cargo || 'empacotador') : 'empacotador';
+    const cargoAtual = getCargoInfo(cargoAtualNome);
+    const bonus = classe === 'trabalhador' ? cargoAtual.bonus : 0;
+    const earned = Math.floor(baseEarned * (1 + bonus));
 
     updateBalance(msg.author, msg.from, earned);
+    const trabalhos = incrementarTrabalhos(msg.author, msg.from);
+    alterarReputacao(msg.author, msg.from, 1);
+
+    let promotedTo = null;
+    if (classe === 'trabalhador') {
+      const reputacaoAtual = Number(player.reputacao ?? 50) + 1;
+      const cargoAtualIndex = ASSAI_CARGOS.findIndex((c) => c.nome === cargoAtual.nome);
+      const proximoCargo = ASSAI_CARGOS[cargoAtualIndex + 1];
+
+      if (
+        proximoCargo &&
+        trabalhos >= proximoCargo.trabalhosMin &&
+        reputacaoAtual >= proximoCargo.reputacaoMin
+      ) {
+        setCargo(msg.author, msg.from, proximoCargo.nome);
+        alterarReputacao(msg.author, msg.from, 3);
+        promotedTo = proximoCargo.nome;
+      }
+    }
+
     setCooldown(msg.author, 'trabalhar');
+
+    if (promotedTo) {
+      const chat = await msg.getChat();
+      await chat.sendMessage(`🎉 ${displayName(player)} foi promovido para ${promotedTo} no Assaí Atacadista!`);
+    }
+
+    await verificarDesbloqueios(msg, msg.author, msg.from);
 
     if (Math.random() < 0.4) {
       const frase = getRandomFrase(msg.from);
@@ -64,14 +238,22 @@ const commands = {
       }
     }
 
-    return msg.reply(`*${displayName(player)}* trabalhou e ganhou R$${earned}.`);
+    return msg.reply(
+      `*${displayName(player)}* trabalhou como *${cargoAtual.nome}* e ganhou R$${earned}.\n` +
+      `${cargoAtual.flavor}`
+    );
   },
 
 
   async saldo(msg) {
     const contact = await msg.getContact();
     const player = getPlayer(msg.author, msg.from, contact.pushname || '');
-    return msg.reply(`Saldo de *${displayName(player)}*: R$${player.balance}`);
+    const reputacao = Number(player.reputacao ?? 50);
+    const faixa = getFaixaReputacao(reputacao);
+    return msg.reply(
+      `Saldo de *${displayName(player)}*: R$${player.balance}\n` +
+      `Reputação: *${reputacao}* (${faixa})`
+    );
   },
 
   async lutar(msg, args) {
@@ -91,17 +273,47 @@ const commands = {
 
     const attackerWins = Math.random() < 0.5;
     const prize = Math.floor(Math.random() * 101) + 50;
+    const attackerName = displayName(attacker);
+    const defenderName = displayName(defender);
 
     if (attackerWins) {
       updateBalance(msg.author, msg.from, prize);
       updateBalance(defender.player_id, msg.from, -prize);
+      incrementarVitoriasLuta(msg.author, msg.from);
+      alterarReputacao(msg.author, msg.from, 2);
+      alterarReputacao(defender.player_id, msg.from, -3);
       setCooldown(msg.author, 'lutar');
-      return msg.reply(`*${displayName(attacker)}* venceu *${displayName(defender)}* e ganhou R$${prize}!`);
+      await verificarDesbloqueios(msg, msg.author, msg.from);
+      await verificarDesbloqueios(msg, defender.player_id, msg.from);
+
+      const template = LUTA_FLAVOR_VITORIA[Math.floor(Math.random() * LUTA_FLAVOR_VITORIA.length)];
+      const flavor = template
+        .replaceAll('[vencedor]', attackerName)
+        .replaceAll('[perdedor]', defenderName);
+
+      return msg.reply(
+        `${flavor}\n` +
+        `🏆 *${attackerName}* venceu e ganhou R$${prize}.`
+      );
     } else {
       updateBalance(msg.author, msg.from, -prize);
       updateBalance(defender.player_id, msg.from, prize);
+      incrementarVitoriasLuta(defender.player_id, msg.from);
+      alterarReputacao(defender.player_id, msg.from, 2);
+      alterarReputacao(msg.author, msg.from, -3);
       setCooldown(msg.author, 'lutar');
-      return msg.reply(`*${displayName(attacker)}* perdeu para *${displayName(defender)}* e pagou R$${prize}.`);
+      await verificarDesbloqueios(msg, msg.author, msg.from);
+      await verificarDesbloqueios(msg, defender.player_id, msg.from);
+
+      const template = LUTA_FLAVOR_DERROTA[Math.floor(Math.random() * LUTA_FLAVOR_DERROTA.length)];
+      const flavor = template
+        .replaceAll('[vencedor]', defenderName)
+        .replaceAll('[perdedor]', attackerName);
+
+      return msg.reply(
+        `${flavor}\n` +
+        `🏆 *${defenderName}* venceu e ganhou R$${prize}.`
+      );
     }
   },
 
@@ -135,6 +347,11 @@ const commands = {
 
     const contact = await msg.getContact();
     const thief = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const thiefClasse = thief.classe || 'trabalhador';
+    if (thiefClasse !== 'ladrao') {
+      return msg.reply('Apenas quem é da classe ladrao pode usar !roubar.');
+    }
+
     const target = getPlayerByAlias(msg.from, targetAlias);
 
     if (!target) return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
@@ -153,9 +370,208 @@ const commands = {
     } else {
       const fine = Math.floor(amount / 2);
       updateBalance(msg.author, msg.from, -fine);
+      alterarReputacao(msg.author, msg.from, -5);
       setCooldown(msg.author, 'roubar');
+      await verificarDesbloqueios(msg, msg.author, msg.from);
       return msg.reply(`*${displayName(thief)}* tentou roubar *${displayName(target)}* e foi pego! Multa de R$${fine}.`);
     }
+  },
+
+  async cargo(msg, args) {
+    const classeDesejada = normalizeClasse(args[0]);
+    if (!classeDesejada) {
+      return msg.reply('Uso: !cargo <trabalhador|ladrao|assassino>');
+    }
+
+    const contact = await msg.getContact();
+    const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const classeAtual = player.classe || 'trabalhador';
+
+    if (classeDesejada === classeAtual) {
+      return msg.reply(`Você já está na classe *${classeAtual}*.`);
+    }
+
+    if (classeDesejada === 'ladrao' && Number(player['ladrão_desbloqueado'] ?? 0) !== 1) {
+      return msg.reply('Classe ladrao ainda não desbloqueada para você.');
+    }
+
+    if (classeDesejada === 'assassino' && Number(player.assassino_desbloqueado ?? 0) !== 1) {
+      return msg.reply('Classe assassino ainda não desbloqueada para você.');
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const lastSwap = Number(player.cooldown_classe ?? 0);
+    const cooldown = 86400;
+    const remaining = cooldown - (now - lastSwap);
+    if (remaining > 0) {
+      return msg.reply(`Você precisa aguardar ${remaining}s para trocar de classe novamente.`);
+    }
+
+    if (classeAtual === 'trabalhador' || classeDesejada === 'trabalhador') {
+      resetTrabalhosECargo(msg.author, msg.from);
+    }
+
+    setClasse(msg.author, msg.from, classeDesejada);
+    setCooldownClasse(msg.author, msg.from, now);
+
+    return msg.reply(`Classe alterada com sucesso para *${classeDesejada}*.`);
+  },
+
+  async rumor(msg, args) {
+    const targetRaw = args[0];
+    if (!targetRaw) return msg.reply('Uso: !rumor @pessoa');
+
+    const targetAlias = targetRaw.startsWith('@') ? targetRaw.slice(1) : targetRaw;
+    if (!targetAlias) return msg.reply('Uso: !rumor @pessoa');
+
+    const contact = await msg.getContact();
+    const sender = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const target = getPlayerByAlias(msg.from, targetAlias);
+
+    if (!target) return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
+    if (target.player_id === msg.author) return msg.reply('Você não pode espalhar rumor sobre si mesmo.');
+
+    if (Number(sender.balance) < 50) {
+      return msg.reply(`Você precisa de R$50 para usar !rumor. Saldo atual: R$${sender.balance}`);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const cdEnviou = 14400;
+    const lastEnviou = Number(sender.cooldown_rumor_enviou ?? 0);
+    const remainingEnviou = cdEnviou - (now - lastEnviou);
+    if (remainingEnviou > 0) {
+      return msg.reply(`Aguarde ${remainingEnviou}s para enviar outro rumor.`);
+    }
+
+    const cdRecebeu = 10800;
+    const lastRecebeu = Number(target.cooldown_rumor_recebeu ?? 0);
+    const remainingRecebeu = cdRecebeu - (now - lastRecebeu);
+    if (remainingRecebeu > 0) {
+      return msg.reply(`*${displayName(target)}* está protegido de rumores por mais ${remainingRecebeu}s.`);
+    }
+
+    updateBalance(msg.author, msg.from, -50);
+    setCooldownRumorEnviou(msg.author, msg.from, now);
+    setCooldownRumorRecebeu(target.player_id, msg.from, now);
+    alterarReputacao(target.player_id, msg.from, -2);
+
+    await verificarDesbloqueios(msg, target.player_id, msg.from);
+
+    const template = RUMORES[Math.floor(Math.random() * RUMORES.length)];
+    const rumor = template.replace('[pessoa]', displayName(target));
+    const chat = await msg.getChat();
+    await chat.sendMessage(rumor);
+
+    return msg.reply(`Rumor espalhado. Custo: R$50.`);
+  },
+
+  async contrato(msg) {
+    const cd = config.cooldowns.trabalhar;
+    if (isOnCooldown(msg.author, 'contrato', cd)) {
+      return msg.reply(`Aguarde ${getRemainingTime(msg.author, 'contrato', cd)}s para pegar outro contrato.`);
+    }
+
+    const contact = await msg.getContact();
+    const assassino = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const classe = assassino.classe || 'trabalhador';
+    if (classe !== 'assassino') {
+      return msg.reply('Apenas jogadores da classe assassino podem usar !contrato.');
+    }
+
+    const players = listGroupPlayers(msg.from).filter((p) => p.id !== msg.author);
+    if (!players.length) {
+      return msg.reply('Não há alvos disponíveis no grupo para contrato.');
+    }
+
+    const alvo = players[Math.floor(Math.random() * players.length)];
+    const premio = Math.floor(Math.random() * (1500 - 300 + 1)) + 300;
+    const expiraEm = Date.now() + CONTRATO_DURACAO_MS;
+
+    setContrato(msg.from, msg.author, {
+      assassinoId: msg.author,
+      alvoId: alvo.id,
+      groupId: msg.from,
+      premio,
+      expiraEm,
+    });
+
+    setCooldown(msg.author, 'contrato');
+
+    return msg.reply(
+      `📋 Novo contrato recebido. Alvo: ${displayName(alvo)}. ` +
+      `Recompensa: R$${premio}. Você tem 2 horas.`
+    );
+  },
+
+  async matar(msg, args) {
+    const targetRaw = args[0];
+    if (!targetRaw) return msg.reply('Uso: !matar @pessoa');
+
+    const targetAlias = targetRaw.startsWith('@') ? targetRaw.slice(1) : targetRaw;
+    if (!targetAlias) return msg.reply('Uso: !matar @pessoa');
+
+    const contact = await msg.getContact();
+    const assassino = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const classe = assassino.classe || 'trabalhador';
+    if (classe !== 'assassino') {
+      return msg.reply('Apenas jogadores da classe assassino podem usar !matar.');
+    }
+
+    const alvo = getPlayerByAlias(msg.from, targetAlias);
+    if (!alvo) return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
+    if (alvo.player_id === msg.author) return msg.reply('Você não pode executar contrato em si mesmo.');
+
+    const contrato = getContratoAtivo(msg.from, msg.author);
+    if (!contrato || contrato.alvoId !== alvo.player_id) {
+      return msg.reply('Não há contrato ativo para esse alvo.');
+    }
+
+    const sucesso = Math.random() < 0.6;
+    clearContrato(msg.from, msg.author);
+
+    if (sucesso) {
+      updateBalance(msg.author, msg.from, contrato.premio);
+      alterarReputacao(msg.author, msg.from, 5);
+      const mortoAte = Math.floor(Date.now() / 1000) + 30 * 60;
+      setMortoAte(alvo.player_id, msg.from, mortoAte);
+
+      await verificarDesbloqueios(msg, msg.author, msg.from);
+
+      return msg.reply(
+        `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} e recebeu R$${contrato.premio}.`
+      );
+    }
+
+    alterarReputacao(msg.author, msg.from, -8);
+    const presoAte = Math.floor(Date.now() / 1000) + 20 * 60;
+    setPresoAte(msg.author, msg.from, presoAte);
+    await verificarDesbloqueios(msg, msg.author, msg.from);
+
+    return msg.reply(`🚨 ${displayName(assassino)} tentou eliminar ${displayName(alvo)} e foi capturado.`);
+  },
+
+  async pagar_multa(msg) {
+    const contact = await msg.getContact();
+    const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const classe = player.classe || 'trabalhador';
+    if (classe !== 'assassino') {
+      return msg.reply('Apenas jogadores da classe assassino podem usar !pagar_multa.');
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const presoAte = Number(player.preso_ate ?? 0);
+
+    if (presoAte <= now) {
+      return msg.reply('Você não está preso.');
+    }
+
+    if (Number(player.balance) < ASSASSINO_MULTA) {
+      return msg.reply(`Saldo insuficiente para pagar a multa de R$${ASSASSINO_MULTA}.`);
+    }
+
+    updateBalance(msg.author, msg.from, -ASSASSINO_MULTA);
+    setPresoAte(msg.author, msg.from, 0);
+    return msg.reply(`Multa paga. Você foi liberado por R$${ASSASSINO_MULTA}.`);
   },
 
   async usuarios(msg) {
@@ -177,10 +593,15 @@ const commands = {
       `*Perfil*\n` +
       `${p}registrar <nome> - Registra seu nome\n` +
       `${p}trocar <nome> - Muda seu nome\n\n` +
+      `${p}cargo <classe> - Troca sua classe\n\n` +
       `*Economia*\n` +
       `${p}trabalhar - Ganhe dinheiro (cooldown: 10min)\n` +
       `${p}lutar <nome> - Lute contra alguém (cooldown: 1min)\n` +
       `${p}roubar <nome> - Tente roubar alguém (cooldown: 2min)\n` +
+      `${p}rumor @pessoa - Espalha um rumor (custo: R$50)\n` +
+      `${p}contrato - Recebe um contrato de assassino\n` +
+      `${p}matar @pessoa - Tenta executar um contrato\n` +
+      `${p}pagar_multa - Paga R$200 para sair da prisão\n` +
       `${p}pix <nome> <valor> - Transfere dinheiro para alguém\n` +
       `${p}saldo - Veja seu saldo\n\n` +
       `*Grupo*\n` +
@@ -216,6 +637,9 @@ const commands = {
 
 commands.usuários = commands.usuarios;
 commands.ranking = commands.usuarios;
+commands.brigar = commands.lutar;
+commands.bater = commands.lutar;
+commands.espancar = commands.lutar;
 commands.transferir = commands.pix;
 commands.doar = commands.pix;
 commands.comandos = commands.ajuda;

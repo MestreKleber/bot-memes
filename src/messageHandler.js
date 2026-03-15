@@ -25,6 +25,35 @@ module.exports = async (client, msg) => {
   const command = commands[commandName];
   if (!command) return;
 
+  const contact = await msg.getContact();
+  const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+  const classe = player.classe || 'trabalhador';
+  const now = Math.floor(Date.now() / 1000);
+
+  const mortoAte = Number(player.morto_ate ?? 0);
+  if (mortoAte > now) {
+    const minutos = Math.max(1, Math.ceil((mortoAte - now) / 60));
+    return msg.reply(`Você está morto. Aguarde ${minutos} minutos.`);
+  }
+
+  const presoAte = Number(player.preso_ate ?? 0);
+  if (presoAte > now && commandName !== 'pagar_multa') {
+    const minutos = Math.max(1, Math.ceil((presoAte - now) / 60));
+    return msg.reply(
+      `Você está preso. Pague R$200 com !pagar_multa ou aguarde ${minutos} minutos.`
+    );
+  }
+
+  const restricoes = {
+    trabalhador: new Set(['roubar', 'matar']),
+    ladrao: new Set(['trabalhar']),
+    assassino: new Set(['trabalhar', 'roubar']),
+  };
+
+  if (restricoes[classe] && restricoes[classe].has(commandName)) {
+    return msg.reply(`A classe *${classe}* não pode usar !${commandName}.`);
+  }
+
   try {
     await command(msg, args);
   } catch (err) {
