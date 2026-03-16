@@ -6,16 +6,23 @@ const { agendarEventos, iniciarEvento } = require('./src/events');
 
 const CMD_FILE = '/tmp/bot-cmd';
 const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: './data' }),
-  puppeteer: {
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-    ],
-    headless: true,
-  },
+    puppeteer: {
+        headless: true,
+        executablePath: '/usr/bin/google-chrome-stable', 
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding'
+        ]
+    },
+    sessionId: null  // força novo login
 });
 
 client.on('qr', (qr) => qrcode.generate(qr, { small: true }));
