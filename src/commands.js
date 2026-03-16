@@ -570,7 +570,7 @@ const commands = {
 
     const now = Math.floor(Date.now() / 1000);
     const lastSwap = Number(player.cooldown_classe ?? 0);
-    const cooldown = 86400;
+    const cooldown = config.cooldowns.trocarCargo;
     const remaining = cooldown - (now - lastSwap);
     if (remaining > 0) {
       return msg.reply(`Você precisa aguardar ${remaining}s para trocar de classe novamente.`);
