@@ -410,7 +410,9 @@ const commands = {
     const reputacao = Number(player.reputacao ?? 50);
     const cargo = player.cargo || 'empacotador';
     const classe = player.classe || 'trabalhador';
-    const cargoExibido = classe === 'trabalhador' ? cargo : 'sem cargo ativo';
+    let cargoExibido = cargo;
+    if (classe === 'ladrao') cargoExibido = 'ladrão';
+    if (classe === 'assassino') cargoExibido = 'assassino';
     const vitoriasLuta = Number(player.vitorias_luta ?? 0);
 
     return msg.reply(
