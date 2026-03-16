@@ -56,6 +56,7 @@ module.exports = async (client, msg) => {
     trabalhador: new Set(['roubar', 'matar']),
     ladrao: new Set(['matar', 'contrato']),
     assassino: new Set(['roubar']),
+    medico: new Set(['roubar', 'matar', 'contrato', 'pagar_multa']),
   };
 
   if (restricoes[classe] && restricoes[classe].has(commandName)) {

@@ -10,10 +10,13 @@ const {
   incrementarVitoriasLuta,
   setLadraoDesbloqueado,
   setAssassinoDesbloqueado,
+  setMedicoDesbloqueado,
   setCooldownRumorEnviou,
   setCooldownRumorRecebeu,
   setMortoAte,
   setPresoAte,
+  setEstudouPrimeiraVez,
+  setCrmProximaCobranca,
   alterarReputacao,
   getFaixaReputacao,
   setAlias,
@@ -21,6 +24,8 @@ const {
   addFrase,
   getRandomFrase,
   listFrases,
+  aumentarStatDireto,
+  evoluirStatPorAcao,
 } = require('./db');
 const { isOnCooldown, setCooldown, getRemainingTime } = require('./cooldown');
 const config = require('./config');
@@ -115,6 +120,12 @@ const LUTA_FLAVOR_DERROTA = [
 
 const CONTRATO_DURACAO_MS = 2 * 60 * 60 * 1000;
 const PRISAO_TEMPO_RECONHECIDO_SEG = 20 * 60;
+const ESTUDO_MENSALIDADE = 500;
+const MEDICO_INT_REQ = 7;
+const MEDICO_CRM_INTERVALO_SEG = 6 * 60 * 60;
+const MEDICO_CRM_MIN = 450;
+const MEDICO_CRM_MAX = 850;
+const PROGRESSO_STAT_THRESHOLD = 5;
 const activeContracts = new Map();
 
 function contratoKey(groupId, assassinoId) {
@@ -161,7 +172,27 @@ function normalizeClasse(input) {
   if (value === 'trabalhador') return 'trabalhador';
   if (value === 'ladrao' || value === 'ladrão') return 'ladrao';
   if (value === 'assassino') return 'assassino';
+  if (value === 'medico' || value === 'médico') return 'medico';
   return null;
+}
+
+function clampChance(value) {
+  return Math.max(0.05, Math.min(0.95, value));
+}
+
+function getStats(player) {
+  return {
+    forca: Number(player.forca ?? 1),
+    inteligencia: Number(player.inteligencia ?? 1),
+    furtividade: Number(player.furtividade ?? 1),
+  };
+}
+
+function formatStatUpMessages(nome, changes) {
+  return changes
+    .filter((c) => c.subiu > 0)
+    .map((c) => `⬆️ ${nome} aumentou ${c.label} para ${c.valorAtual}.`)
+    .join('\n');
 }
 
 async function verificarDesbloqueios(msg, playerId, groupId) {
@@ -237,6 +268,48 @@ const commands = {
     const contact = await msg.getContact();
     const player = getPlayer(msg.author, msg.from, contact.pushname || '');
     const classe = player.classe || 'trabalhador';
+    const nome = displayName(player);
+
+    if (classe === 'medico') {
+      const now = Math.floor(Date.now() / 1000);
+      const proximaCobranca = Number(player.crm_proxima_cobranca ?? 0);
+
+      if (proximaCobranca <= now) {
+        const taxaCrm = Math.floor(Math.random() * (MEDICO_CRM_MAX - MEDICO_CRM_MIN + 1)) + MEDICO_CRM_MIN;
+        if (Number(player.balance) < taxaCrm) {
+          return msg.reply(
+            `Seu CRM venceu e a taxa de renovação é R$${taxaCrm}. ` +
+            `Sem isso você não pode atender na UPA.`
+          );
+        }
+
+        updateBalance(msg.author, msg.from, -taxaCrm);
+        setCrmProximaCobranca(msg.author, msg.from, now + MEDICO_CRM_INTERVALO_SEG);
+
+        const earned = Math.floor(Math.random() * (2300 - 1200 + 1)) + 1200;
+        updateBalance(msg.author, msg.from, earned);
+        incrementarTrabalhos(msg.author, msg.from);
+        alterarReputacao(msg.author, msg.from, 10);
+        setCooldown(msg.author, 'trabalhar');
+
+        return msg.reply(
+          `👨‍⚕️ *${nome}* pagou R$${taxaCrm} da CRM e entrou no plantão da UPA.\n` +
+          `Atendeu meio bairro e recebeu R$${earned}.\n` +
+          `Reputação +10.`
+        );
+      }
+
+      const earned = Math.floor(Math.random() * (2300 - 1200 + 1)) + 1200;
+      updateBalance(msg.author, msg.from, earned);
+      incrementarTrabalhos(msg.author, msg.from);
+      alterarReputacao(msg.author, msg.from, 10);
+      setCooldown(msg.author, 'trabalhar');
+
+      return msg.reply(
+        `👨‍⚕️ *${nome}* fez plantão na UPA e ganhou R$${earned}.\n` +
+        `Você salvou o bairro inteiro do caos e recebeu +10 de reputação.`
+      );
+    }
 
     if (classe === 'ladrao' || classe === 'assassino') {
       const chanceReconhecido = classe === 'assassino' ? 0.35 : 0.25;
@@ -304,7 +377,7 @@ const commands = {
       : `Você trabalhou discretamente para não chamar muita atenção.`;
 
     return msg.reply(
-      `*${displayName(player)}* trabalhou como *${cargoAtual.nome}* e ganhou R$${earned}.\n` +
+      `*${nome}* trabalhou como *${cargoAtual.nome}* e ganhou R$${earned}.\n` +
       `${flavor}`
     );
   },
@@ -323,6 +396,27 @@ const commands = {
     const roll = Math.random() * 100;
 
     setCooldown(msg.author, 'passear');
+
+    if (roll < 15) {
+      const eventosDeStat = [
+        {
+          stat: 'forca',
+          texto: `🥊 ${nomeAutor} encontrou o Mike Baguncinha na rua e aprendeu uns golpes novos. Força +1!`,
+        },
+        {
+          stat: 'inteligencia',
+          texto: `📚 ${nomeAutor} trombou com o Mizerávi e saiu sabendo até regra de três. Inteligência +1!`,
+        },
+        {
+          stat: 'furtividade',
+          texto: `🕶️ ${nomeAutor} conheceu a Dona Sombra no beco e aprendeu a sumir sem fazer barulho. Furtividade +1!`,
+        },
+      ];
+
+      const evento = eventosDeStat[Math.floor(Math.random() * eventosDeStat.length)];
+      const valorAtual = aumentarStatDireto(msg.author, msg.from, evento.stat, 1);
+      return msg.reply(`${evento.texto} (Agora: ${valorAtual}/10)`);
+    }
 
     if (roll < 25) {
       return msg.reply(pick(PASSEAR_MSG_NADA));
@@ -410,9 +504,11 @@ const commands = {
     const reputacao = Number(player.reputacao ?? 50);
     const cargo = player.cargo || 'empacotador';
     const classe = player.classe || 'trabalhador';
+    const stats = getStats(player);
     let cargoExibido = cargo;
     if (classe === 'ladrao') cargoExibido = 'ladrão';
     if (classe === 'assassino') cargoExibido = 'assassino';
+    if (classe === 'medico') cargoExibido = 'médico';
     const vitoriasLuta = Number(player.vitorias_luta ?? 0);
 
     return msg.reply(
@@ -420,7 +516,10 @@ const commands = {
       `Saldo: R$${saldo}\n` +
       `Reputação: ${reputacao}\n` +
       `Cargo: ${cargoExibido}\n` +
-      `Vitórias em luta: ${vitoriasLuta}`
+      `Vitórias em luta: ${vitoriasLuta}\n` +
+      `Força: ${stats.forca}/10\n` +
+      `Inteligência: ${stats.inteligencia}/10\n` +
+      `Furtividade: ${stats.furtividade}/10`
     );
   },
 
@@ -439,10 +538,17 @@ const commands = {
     if (!defender) return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
     if (defender.player_id === msg.author) return msg.reply('Você não pode lutar contra si mesmo.');
 
-    const attackerWins = Math.random() < 0.5;
+    const attackerStats = getStats(attacker);
+    const defenderStats = getStats(defender);
+    const chanceAtacante = clampChance(0.5 + (attackerStats.forca - defenderStats.forca) * 0.04);
+    const attackerWins = Math.random() < chanceAtacante;
     const prize = Math.floor(Math.random() * 101) + 50;
     const attackerName = displayName(attacker);
     const defenderName = displayName(defender);
+    const progressoForca = evoluirStatPorAcao(msg.author, msg.from, 'forca', PROGRESSO_STAT_THRESHOLD);
+    const statUps = formatStatUpMessages(attackerName, [
+      { label: 'força', subiu: progressoForca.subiu, valorAtual: progressoForca.stat },
+    ]);
 
     if (attackerWins) {
       updateBalance(msg.author, msg.from, prize);
@@ -461,7 +567,8 @@ const commands = {
 
       return msg.reply(
         `${flavor}\n` +
-        `🏆 *${attackerName}* venceu e ganhou R$${prize}.`
+        `🏆 *${attackerName}* venceu e ganhou R$${prize}.` +
+        (statUps ? `\n${statUps}` : '')
       );
     } else {
       updateBalance(msg.author, msg.from, -prize);
@@ -480,7 +587,8 @@ const commands = {
 
       return msg.reply(
         `${flavor}\n` +
-        `🏆 *${defenderName}* venceu e ganhou R$${prize}.`
+        `🏆 *${defenderName}* venceu e ganhou R$${prize}.` +
+        (statUps ? `\n${statUps}` : '')
       );
     }
   },
@@ -526,8 +634,15 @@ const commands = {
     if (target.player_id === msg.author) return msg.reply('Você não pode roubar a si mesmo.');
     if (target.balance <= 0) return msg.reply(`*${displayName(target)}* não tem dinheiro para roubar.`);
 
-    const success = Math.random() < 0.4;
+    const thiefStats = getStats(thief);
+    const targetStats = getStats(target);
+    const chanceRoubo = clampChance(0.35 + (thiefStats.furtividade - targetStats.furtividade) * 0.05);
+    const success = Math.random() < chanceRoubo;
     const amount = Math.floor(Math.random() * 181) + 40;
+    const progressoFurtividade = evoluirStatPorAcao(msg.author, msg.from, 'furtividade', PROGRESSO_STAT_THRESHOLD);
+    const statUps = formatStatUpMessages(displayName(thief), [
+      { label: 'furtividade', subiu: progressoFurtividade.subiu, valorAtual: progressoFurtividade.stat },
+    ]);
 
     if (success) {
       const stolen = Math.min(amount, target.balance);
@@ -535,21 +650,27 @@ const commands = {
       updateBalance(target.player_id, msg.from, -stolen);
       alterarReputacao(msg.author, msg.from, -2);
       setCooldown(msg.author, 'roubar');
-      return msg.reply(`*${displayName(thief)}* roubou R$${stolen} de *${displayName(target)}*!`);
+      return msg.reply(
+        `*${displayName(thief)}* roubou R$${stolen} de *${displayName(target)}*!` +
+        (statUps ? `\n${statUps}` : '')
+      );
     } else {
       const fine = Math.floor(amount / 2);
       updateBalance(msg.author, msg.from, -fine);
       alterarReputacao(msg.author, msg.from, -5);
       setCooldown(msg.author, 'roubar');
       await verificarDesbloqueios(msg, msg.author, msg.from);
-      return msg.reply(`*${displayName(thief)}* tentou roubar *${displayName(target)}* e foi pego! Multa de R$${fine}.`);
+      return msg.reply(
+        `*${displayName(thief)}* tentou roubar *${displayName(target)}* e foi pego! Multa de R$${fine}.` +
+        (statUps ? `\n${statUps}` : '')
+      );
     }
   },
 
   async cargo(msg, args) {
     const classeDesejada = normalizeClasse(args[0]);
     if (!classeDesejada) {
-      return msg.reply('Uso: !cargo <trabalhador|ladrao|assassino>');
+      return msg.reply('Uso: !cargo <trabalhador|ladrao|assassino|medico>');
     }
 
     const contact = await msg.getContact();
@@ -566,6 +687,10 @@ const commands = {
 
     if (classeDesejada === 'assassino' && Number(player.assassino_desbloqueado ?? 0) !== 1) {
       return msg.reply('Classe assassino ainda não desbloqueada para você.');
+    }
+
+    if (classeDesejada === 'medico' && Number(player.medico_desbloqueado ?? 0) !== 1) {
+      return msg.reply('Você ainda não passou na prova de medicina. Use !prova_medico.');
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -692,7 +817,14 @@ const commands = {
 
     const contrato = getContratoAtivo(msg.from, msg.author);
     const isContratoValido = !!(contrato && contrato.alvoId === alvo.player_id);
-    const sucesso = Math.random() < 0.6;
+    const assassinoStats = getStats(assassino);
+    const alvoStats = getStats(alvo);
+    const chanceBase = isContratoValido ? 0.65 : 0.55;
+    const sucesso = Math.random() < clampChance(chanceBase + (assassinoStats.furtividade - alvoStats.furtividade) * 0.04);
+    const progressoFurtividade = evoluirStatPorAcao(msg.author, msg.from, 'furtividade', PROGRESSO_STAT_THRESHOLD);
+    const statUps = formatStatUpMessages(displayName(assassino), [
+      { label: 'furtividade', subiu: progressoFurtividade.subiu, valorAtual: progressoFurtividade.stat },
+    ]);
     if (isContratoValido) {
       clearContrato(msg.from, msg.author);
     }
@@ -709,12 +841,14 @@ const commands = {
 
       if (isContratoValido) {
         return msg.reply(
-          `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} e recebeu R$${contrato.premio}.`
+          `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} e recebeu R$${contrato.premio}.` +
+          (statUps ? `\n${statUps}` : '')
         );
       }
 
       return msg.reply(
-        `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} fora de contrato e não recebeu recompensa.`
+        `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} fora de contrato e não recebeu recompensa.` +
+        (statUps ? `\n${statUps}` : '')
       );
     }
 
@@ -723,7 +857,10 @@ const commands = {
     setPresoAte(msg.author, msg.from, presoAte);
     await verificarDesbloqueios(msg, msg.author, msg.from);
 
-    return msg.reply(`🚨 ${displayName(assassino)} tentou eliminar ${displayName(alvo)} e foi capturado.`);
+    return msg.reply(
+      `🚨 ${displayName(assassino)} tentou eliminar ${displayName(alvo)} e foi capturado.` +
+      (statUps ? `\n${statUps}` : '')
+    );
   },
 
   async pagar_multa(msg) {
@@ -752,6 +889,96 @@ const commands = {
     return msg.reply(`Multa paga. Você foi liberado por R$${multa}.`);
   },
 
+  async estudar(msg) {
+    const cd = config.cooldowns.estudar;
+    if (isOnCooldown(msg.author, 'estudar', cd)) {
+      return msg.reply(`Aguarde ${getRemainingTime(msg.author, 'estudar', cd)}s para estudar de novo.`);
+    }
+
+    const contact = await msg.getContact();
+    const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const nome = displayName(player);
+    const estudouPrimeiraVez = Number(player.estudou_primeira_vez ?? 0) === 1;
+
+    if (!estudouPrimeiraVez) {
+      setEstudouPrimeiraVez(msg.author, msg.from, 1);
+      const novaInteligencia = aumentarStatDireto(msg.author, msg.from, 'inteligencia', 1);
+      setCooldown(msg.author, 'estudar');
+      return msg.reply(
+        `"Oi vem estuda com nois. A mensalidade é ${ESTUDO_MENSALIDADE}"\n` +
+        `${nome} estudou e ganhou +1 de inteligência. (${novaInteligencia}/10)`
+      );
+    }
+
+    const novaInteligencia = aumentarStatDireto(msg.author, msg.from, 'inteligencia', 1);
+    setCooldown(msg.author, 'estudar');
+    return msg.reply(`📘 ${nome} estudou e ganhou +1 de inteligência. (${novaInteligencia}/10)`);
+  },
+
+  async prova_medico(msg) {
+    const contact = await msg.getContact();
+    const player = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const nome = displayName(player);
+    const inteligencia = Number(player.inteligencia ?? 1);
+
+    if (Number(player.medico_desbloqueado ?? 0) === 1) {
+      return msg.reply('Você já passou na prova de medicina. Use !cargo medico quando quiser.');
+    }
+
+    if (inteligencia < MEDICO_INT_REQ) {
+      return msg.reply(
+        'Você pediu pra fazer a prova, mas só riram da sua cara. ' +
+        `Estude mais e chegue em ${MEDICO_INT_REQ} de inteligência.`
+      );
+    }
+
+    const chancePassar = clampChance(0.6 + (inteligencia - MEDICO_INT_REQ) * 0.05);
+    const passou = Math.random() < chancePassar;
+
+    if (!passou) {
+      return msg.reply(
+        `📝 ${nome} travou na prova de medicina e foi reprovado por enquanto. ` +
+        'Tenta de novo depois de estudar mais.'
+      );
+    }
+
+    setMedicoDesbloqueado(msg.author, msg.from, 1);
+    if (Number(player.crm_proxima_cobranca ?? 0) <= 0) {
+      const now = Math.floor(Date.now() / 1000);
+      setCrmProximaCobranca(msg.author, msg.from, now + MEDICO_CRM_INTERVALO_SEG);
+    }
+
+    return msg.reply(
+      `🎓 ${nome} passou na prova de medicina! ` +
+      'Agora use !cargo medico para começar os plantões na UPA.'
+    );
+  },
+
+  async ressuscitar(msg, args) {
+    const targetAlias = args[0];
+    if (!targetAlias) return msg.reply('Uso: !ressuscitar <nome>');
+
+    const contact = await msg.getContact();
+    const medico = getPlayer(msg.author, msg.from, contact.pushname || '');
+    const classe = medico.classe || 'trabalhador';
+    if (classe !== 'medico') {
+      return msg.reply('Apenas médicos podem usar !ressuscitar.');
+    }
+
+    const alvo = getPlayerByAlias(msg.from, targetAlias);
+    if (!alvo) return msg.reply(`Nenhum jogador com o nome *${targetAlias}* encontrado.`);
+
+    const now = Math.floor(Date.now() / 1000);
+    const mortoAte = Number(alvo.morto_ate ?? 0);
+    if (mortoAte <= now) {
+      return msg.reply(`*${displayName(alvo)}* não está morto no momento.`);
+    }
+
+    setMortoAte(alvo.player_id, msg.from, 0);
+    alterarReputacao(msg.author, msg.from, 5);
+    return msg.reply(`⚕️ ${displayName(medico)} ressuscitou ${displayName(alvo)}. Milagre da UPA.`);
+  },
+
   async usuarios(msg) {
     const players = listGroupPlayers(msg.from);
     if (!players.length) return msg.reply('Nenhum jogador registrado neste grupo ainda.');
@@ -771,11 +998,14 @@ const commands = {
       `*Perfil*\n` +
       `${p}registrar <nome> - Registra seu nome\n` +
       `${p}trocar <nome> - Muda seu nome (cooldown: 7 dias)\n` +
-      `${p}status [nome] - Mostra saldo, reputação, cargo e vitórias\n\n` +
-      `${p}cargo <classe> - Troca sua classe\n\n` +
+      `${p}status [nome] - Mostra saldo, reputação, cargo, vitórias e stats\n` +
+      `${p}cargo <trabalhador|ladrao|assassino|medico> - Troca sua classe\n` +
+      `${p}estudar - Aumenta inteligência +1 (cooldown: 5min)\n` +
+      `${p}prova_medico - Faz a prova para desbloquear médico\n` +
+      `${p}ressuscitar <nome> - Médicos trazem mortos de volta\n\n` +
       `*Economia*\n` +
       `${p}trabalhar - Ganhe dinheiro (classes ladrao/assassino podem ser reconhecidas e presas)\n` +
-      `${p}passear - Dê uma volta pelo bairro (cooldown: 5min)\n` +
+      `${p}passear / ${p}andar - Dê uma volta pelo bairro (cooldown: 1min)\n` +
       `${p}lutar <nome> - Lute contra alguém (cooldown: 1min)\n` +
       `${p}roubar <nome> - Tente roubar alguém (cooldown: 2min)\n` +
       `${p}rumor @pessoa - Espalha um rumor (custo: R$50, cooldown reduzido)\n` +
@@ -830,6 +1060,9 @@ commands.help = commands.ajuda;
 commands.perfil = commands.status;
 commands.reputação = commands.status;
 commands.reputacao = commands.status;
+commands.prova = commands.prova_medico;
+commands.estudar_medicina = commands.prova_medico;
+commands.reviver = commands.ressuscitar;
 
 
 module.exports = commands;

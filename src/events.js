@@ -64,6 +64,12 @@ function gerarDigitacao() {
     'o tempo perguntou ao tempo quanto tempo o tempo tem',
     'quem tem medo de quê',
     'sabendo bem saber bem se sabe',
+    'um tapa na gostosa yes baby thank you',
+    'nao consegue né Moisés',
+    'mojang é meu ovo',
+    'que cachorro o que eu não sou cachorro não',
+    'toma livro, toma livro, vem ler um livro comigo',
+    'receba graças a deus pai',
   ];
   const frase = frases[Math.floor(Math.random() * frases.length)];
   return {

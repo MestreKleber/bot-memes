@@ -34,6 +34,14 @@ function ensureGroupPlayersColumns() {
     { name: 'preso_ate', typeAndDefault: 'INTEGER DEFAULT 0' },
     { name: 'ladrão_desbloqueado', typeAndDefault: 'INTEGER DEFAULT 0' },
     { name: 'assassino_desbloqueado', typeAndDefault: 'INTEGER DEFAULT 0' },
+    { name: 'forca', typeAndDefault: 'INTEGER DEFAULT 1' },
+    { name: 'inteligencia', typeAndDefault: 'INTEGER DEFAULT 1' },
+    { name: 'furtividade', typeAndDefault: 'INTEGER DEFAULT 1' },
+    { name: 'progresso_forca', typeAndDefault: 'INTEGER DEFAULT 0' },
+    { name: 'progresso_furtividade', typeAndDefault: 'INTEGER DEFAULT 0' },
+    { name: 'medico_desbloqueado', typeAndDefault: 'INTEGER DEFAULT 0' },
+    { name: 'estudou_primeira_vez', typeAndDefault: 'INTEGER DEFAULT 0' },
+    { name: 'crm_proxima_cobranca', typeAndDefault: 'INTEGER DEFAULT 0' },
   ];
 
   for (const column of columnsToAdd) {
@@ -44,6 +52,11 @@ function ensureGroupPlayersColumns() {
 }
 
 ensureGroupPlayersColumns();
+
+const STAT_COLUMN_MAP = {
+  forca: { stat: 'forca', progresso: 'progresso_forca' },
+  furtividade: { stat: 'furtividade', progresso: 'progresso_furtividade' },
+};
 
 function addFrase(groupId, playerId, alias, texto) {
   db.prepare(
@@ -84,6 +97,83 @@ function getPlayer(playerId, groupId, name) {
   }
 
   return { ...player, ...gp };
+}
+
+function aumentarStatDireto(playerId, groupId, statName, amount = 1) {
+  const allowed = new Set(['forca', 'inteligencia', 'furtividade']);
+  if (!allowed.has(statName)) {
+    throw new Error(`Stat inválido: ${statName}`);
+  }
+
+  db.prepare(`
+    UPDATE group_players
+    SET ${statName} = MIN(10, MAX(1, COALESCE(${statName}, 1) + ?))
+    WHERE player_id = ? AND group_id = ?
+  `).run(amount, playerId, groupId);
+
+  const row = db.prepare(
+    `SELECT ${statName} AS valor FROM group_players WHERE player_id = ? AND group_id = ?`
+  ).get(playerId, groupId);
+
+  return row ? row.valor : 1;
+}
+
+function evoluirStatPorAcao(playerId, groupId, statName, threshold = 5) {
+  const mapping = STAT_COLUMN_MAP[statName];
+  if (!mapping) {
+    throw new Error(`Stat inválido para evolução por ação: ${statName}`);
+  }
+
+  const row = db.prepare(
+    `SELECT ${mapping.stat} AS stat, ${mapping.progresso} AS progresso
+     FROM group_players
+     WHERE player_id = ? AND group_id = ?`
+  ).get(playerId, groupId);
+
+  let stat = Number(row?.stat ?? 1);
+  let progresso = Number(row?.progresso ?? 0) + 1;
+  let subiu = 0;
+
+  while (progresso >= threshold && stat < 10) {
+    progresso -= threshold;
+    stat += 1;
+    subiu += 1;
+  }
+
+  if (stat >= 10) {
+    progresso = 0;
+  }
+
+  db.prepare(
+    `UPDATE group_players
+     SET ${mapping.stat} = ?, ${mapping.progresso} = ?
+     WHERE player_id = ? AND group_id = ?`
+  ).run(stat, progresso, playerId, groupId);
+
+  return {
+    stat,
+    progresso,
+    subiu,
+    faltam: stat >= 10 ? 0 : Math.max(0, threshold - progresso),
+  };
+}
+
+function setMedicoDesbloqueado(playerId, groupId, valor) {
+  db.prepare(
+    'UPDATE group_players SET medico_desbloqueado = ? WHERE player_id = ? AND group_id = ?'
+  ).run(valor, playerId, groupId);
+}
+
+function setEstudouPrimeiraVez(playerId, groupId, valor) {
+  db.prepare(
+    'UPDATE group_players SET estudou_primeira_vez = ? WHERE player_id = ? AND group_id = ?'
+  ).run(valor, playerId, groupId);
+}
+
+function setCrmProximaCobranca(playerId, groupId, timestamp) {
+  db.prepare(
+    'UPDATE group_players SET crm_proxima_cobranca = ? WHERE player_id = ? AND group_id = ?'
+  ).run(timestamp, playerId, groupId);
 }
 
 function getPlayerByAlias(groupId, alias) {
@@ -246,10 +336,13 @@ module.exports = {
   incrementarVitoriasLuta,
   setLadraoDesbloqueado,
   setAssassinoDesbloqueado,
+  setMedicoDesbloqueado,
   setCooldownRumorEnviou,
   setCooldownRumorRecebeu,
   setMortoAte,
   setPresoAte,
+  setEstudouPrimeiraVez,
+  setCrmProximaCobranca,
   alterarReputacao,
   getFaixaReputacao,
   setAlias,
@@ -257,4 +350,6 @@ module.exports = {
   addFrase,
   getRandomFrase,
   listFrases,
+  aumentarStatDireto,
+  evoluirStatPorAcao,
 };
