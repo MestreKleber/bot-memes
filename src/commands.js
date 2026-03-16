@@ -905,7 +905,7 @@ const commands = {
       const novaInteligencia = aumentarStatDireto(msg.author, msg.from, 'inteligencia', 1);
       setCooldown(msg.author, 'estudar');
       return msg.reply(
-        `"Oi vem estuda com nois. A mensalidade é ${ESTUDO_MENSALIDADE}"\n` +
+        `"*Estácio:* Oi vem estuda com nois. A mensalidade é ${ESTUDO_MENSALIDADE}"\n` +
         `${nome} estudou e ganhou +1 de inteligência. (${novaInteligencia}/10)`
       );
     }
