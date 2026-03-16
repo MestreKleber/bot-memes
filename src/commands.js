@@ -533,6 +533,7 @@ const commands = {
       const stolen = Math.min(amount, target.balance);
       updateBalance(msg.author, msg.from, stolen);
       updateBalance(target.player_id, msg.from, -stolen);
+      alterarReputacao(msg.author, msg.from, -2);
       setCooldown(msg.author, 'roubar');
       return msg.reply(`*${displayName(thief)}* roubou R$${stolen} de *${displayName(target)}*!`);
     } else {
@@ -700,7 +701,7 @@ const commands = {
       if (isContratoValido) {
         updateBalance(msg.author, msg.from, contrato.premio);
       }
-      alterarReputacao(msg.author, msg.from, 5);
+      alterarReputacao(msg.author, msg.from, -5);
       const mortoAte = Math.floor(Date.now() / 1000) + 30 * 60;
       setMortoAte(alvo.player_id, msg.from, mortoAte);
 
