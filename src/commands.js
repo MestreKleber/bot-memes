@@ -113,8 +113,8 @@ const LUTA_FLAVOR_DERROTA = [
   '💀 [perdedor] vai precisar de um tempo pra se recuperar disso.',
 ];
 
-const ASSASSINO_MULTA = 200;
 const CONTRATO_DURACAO_MS = 2 * 60 * 60 * 1000;
+const PRISAO_TEMPO_RECONHECIDO_SEG = 20 * 60;
 const activeContracts = new Map();
 
 function contratoKey(groupId, assassinoId) {
@@ -147,6 +147,12 @@ function getContratoAtivo(groupId, assassinoId) {
     return null;
   }
   return contrato;
+}
+
+function calcularMultaPeloTempo(presoAte, now) {
+  const segundosRestantes = Math.max(0, presoAte - now);
+  const minutosRestantes = Math.max(1, Math.ceil(segundosRestantes / 60));
+  return minutosRestantes * 10;
 }
 
 function normalizeClasse(input) {
@@ -206,12 +212,19 @@ const commands = {
     const alias = args[0];
     if (!alias) return msg.reply('Uso: !trocar <novo nome>');
     if (alias.length > 20) return msg.reply('Nome muito longo, máximo 20 caracteres.');
+    if (isOnCooldown(msg.author, 'trocar_nome', config.cooldowns.trocarNome)) {
+      return msg.reply(
+        `Você precisa aguardar ${getRemainingTime(msg.author, 'trocar_nome', config.cooldowns.trocarNome)}s para trocar de nome novamente.`
+      );
+    }
 
     const contact = await msg.getContact();
     getPlayer(msg.author, msg.from, contact.pushname || '');
 
     const result = setAlias(msg.author, msg.from, alias);
     if (result.error === 'alias_taken') return msg.reply(`O nome *${alias}* já está em uso neste grupo.`);
+
+    setCooldown(msg.author, 'trocar_nome');
 
     return msg.reply(`Nome alterado para *${alias}*.`);
   },
@@ -224,8 +237,15 @@ const commands = {
     const contact = await msg.getContact();
     const player = getPlayer(msg.author, msg.from, contact.pushname || '');
     const classe = player.classe || 'trabalhador';
-    if (classe !== 'trabalhador') {
-      return msg.reply('Apenas quem é da classe trabalhador pode usar !trabalhar.');
+
+    if (classe === 'ladrao' || classe === 'assassino') {
+      const chanceReconhecido = classe === 'assassino' ? 0.35 : 0.25;
+      if (Math.random() < chanceReconhecido) {
+        const presoAte = Math.floor(Date.now() / 1000) + PRISAO_TEMPO_RECONHECIDO_SEG;
+        setPresoAte(msg.author, msg.from, presoAte);
+        setCooldown(msg.author, 'trabalhar');
+        return msg.reply(`Você foi reconhecido enquanto trabalhava e acabou preso por 20 minutos.`);
+      }
     }
 
     const baseEarned = Math.floor(Math.random() * 151) + 50;
@@ -279,14 +299,18 @@ const commands = {
       }
     }
 
+    const flavor = classe === 'trabalhador'
+      ? cargoAtual.flavor
+      : `Você trabalhou discretamente para não chamar muita atenção.`;
+
     return msg.reply(
       `*${displayName(player)}* trabalhou como *${cargoAtual.nome}* e ganhou R$${earned}.\n` +
-      `${cargoAtual.flavor}`
+      `${flavor}`
     );
   },
 
   async passear(msg) {
-    const cd = config.cooldowns.trabalhar;
+    const cd = config.cooldowns.passear;
     if (isOnCooldown(msg.author, 'passear', cd)) {
       return msg.reply(`Aguarde ${getRemainingTime(msg.author, 'passear', cd)}s para passear de novo.`);
     }
@@ -305,7 +329,7 @@ const commands = {
     }
 
     if (roll < 50) {
-      const valor = Math.floor(Math.random() * 100) + 1;
+      const valor = Math.floor(Math.random() * 40) + 1;
       updateBalance(msg.author, msg.from, valor);
       return msg.reply(`💰 ${nomeAutor} achou R$${valor} no caminho.`);
     }
@@ -385,12 +409,16 @@ const commands = {
     const saldo = Number(player.balance ?? 0);
     const reputacao = Number(player.reputacao ?? 50);
     const cargo = player.cargo || 'empacotador';
+    const classe = player.classe || 'trabalhador';
+    const cargoExibido = classe === 'trabalhador' ? cargo : 'sem cargo ativo';
+    const vitoriasLuta = Number(player.vitorias_luta ?? 0);
 
     return msg.reply(
       `*Status de ${nome}*\n` +
       `Saldo: R$${saldo}\n` +
       `Reputação: ${reputacao}\n` +
-      `Cargo: ${cargo}`
+      `Cargo: ${cargoExibido}\n` +
+      `Vitórias em luta: ${vitoriasLuta}`
     );
   },
 
@@ -497,7 +525,7 @@ const commands = {
     if (target.balance <= 0) return msg.reply(`*${displayName(target)}* não tem dinheiro para roubar.`);
 
     const success = Math.random() < 0.4;
-    const amount = Math.floor(Math.random() * 101) + 20;
+    const amount = Math.floor(Math.random() * 181) + 40;
 
     if (success) {
       const stolen = Math.min(amount, target.balance);
@@ -574,14 +602,14 @@ const commands = {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const cdEnviou = 14400;
+    const cdEnviou = config.cooldowns.rumorEnviou;
     const lastEnviou = Number(sender.cooldown_rumor_enviou ?? 0);
     const remainingEnviou = cdEnviou - (now - lastEnviou);
     if (remainingEnviou > 0) {
       return msg.reply(`Aguarde ${remainingEnviou}s para enviar outro rumor.`);
     }
 
-    const cdRecebeu = 10800;
+    const cdRecebeu = config.cooldowns.rumorRecebeu;
     const lastRecebeu = Number(target.cooldown_rumor_recebeu ?? 0);
     const remainingRecebeu = cdRecebeu - (now - lastRecebeu);
     if (remainingRecebeu > 0) {
@@ -591,7 +619,7 @@ const commands = {
     updateBalance(msg.author, msg.from, -50);
     setCooldownRumorEnviou(msg.author, msg.from, now);
     setCooldownRumorRecebeu(target.player_id, msg.from, now);
-    alterarReputacao(target.player_id, msg.from, -2);
+    alterarReputacao(target.player_id, msg.from, -4);
 
     await verificarDesbloqueios(msg, target.player_id, msg.from);
 
@@ -604,7 +632,7 @@ const commands = {
   },
 
   async contrato(msg) {
-    const cd = config.cooldowns.trabalhar;
+    const cd = config.cooldowns.contrato;
     if (isOnCooldown(msg.author, 'contrato', cd)) {
       return msg.reply(`Aguarde ${getRemainingTime(msg.author, 'contrato', cd)}s para pegar outro contrato.`);
     }
@@ -660,23 +688,30 @@ const commands = {
     if (alvo.player_id === msg.author) return msg.reply('Você não pode executar contrato em si mesmo.');
 
     const contrato = getContratoAtivo(msg.from, msg.author);
-    if (!contrato || contrato.alvoId !== alvo.player_id) {
-      return msg.reply('Não há contrato ativo para esse alvo.');
+    const isContratoValido = !!(contrato && contrato.alvoId === alvo.player_id);
+    const sucesso = Math.random() < 0.6;
+    if (isContratoValido) {
+      clearContrato(msg.from, msg.author);
     }
 
-    const sucesso = Math.random() < 0.6;
-    clearContrato(msg.from, msg.author);
-
     if (sucesso) {
-      updateBalance(msg.author, msg.from, contrato.premio);
+      if (isContratoValido) {
+        updateBalance(msg.author, msg.from, contrato.premio);
+      }
       alterarReputacao(msg.author, msg.from, 5);
       const mortoAte = Math.floor(Date.now() / 1000) + 30 * 60;
       setMortoAte(alvo.player_id, msg.from, mortoAte);
 
       await verificarDesbloqueios(msg, msg.author, msg.from);
 
+      if (isContratoValido) {
+        return msg.reply(
+          `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} e recebeu R$${contrato.premio}.`
+        );
+      }
+
       return msg.reply(
-        `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} e recebeu R$${contrato.premio}.`
+        `💀 ${displayName(assassino)} eliminou ${displayName(alvo)} fora de contrato e não recebeu recompensa.`
       );
     }
 
@@ -703,13 +738,15 @@ const commands = {
       return msg.reply('Você não está preso.');
     }
 
-    if (Number(player.balance) < ASSASSINO_MULTA) {
-      return msg.reply(`Saldo insuficiente para pagar a multa de R$${ASSASSINO_MULTA}.`);
+    const multa = calcularMultaPeloTempo(presoAte, now);
+
+    if (Number(player.balance) < multa) {
+      return msg.reply(`Saldo insuficiente para pagar a multa de R$${multa}.`);
     }
 
-    updateBalance(msg.author, msg.from, -ASSASSINO_MULTA);
+    updateBalance(msg.author, msg.from, -multa);
     setPresoAte(msg.author, msg.from, 0);
-    return msg.reply(`Multa paga. Você foi liberado por R$${ASSASSINO_MULTA}.`);
+    return msg.reply(`Multa paga. Você foi liberado por R$${multa}.`);
   },
 
   async usuarios(msg) {
@@ -730,17 +767,18 @@ const commands = {
       `*Comandos disponíveis:*\n\n` +
       `*Perfil*\n` +
       `${p}registrar <nome> - Registra seu nome\n` +
-      `${p}trocar <nome> - Muda seu nome\n\n` +
+      `${p}trocar <nome> - Muda seu nome (cooldown: 7 dias)\n` +
+      `${p}status [nome] - Mostra saldo, reputação, cargo e vitórias\n\n` +
       `${p}cargo <classe> - Troca sua classe\n\n` +
       `*Economia*\n` +
-      `${p}trabalhar - Ganhe dinheiro (cooldown: 10min)\n` +
-      `${p}passear - Dê uma volta pelo bairro (cooldown: 10min)\n` +
+      `${p}trabalhar - Ganhe dinheiro (classes ladrao/assassino podem ser reconhecidas e presas)\n` +
+      `${p}passear - Dê uma volta pelo bairro (cooldown: 5min)\n` +
       `${p}lutar <nome> - Lute contra alguém (cooldown: 1min)\n` +
       `${p}roubar <nome> - Tente roubar alguém (cooldown: 2min)\n` +
-      `${p}rumor @pessoa - Espalha um rumor (custo: R$50)\n` +
-      `${p}contrato - Recebe um contrato de assassino\n` +
-      `${p}matar @pessoa - Tenta executar um contrato\n` +
-      `${p}pagar_multa - Paga R$200 para sair da prisão\n` +
+      `${p}rumor @pessoa - Espalha um rumor (custo: R$50, cooldown reduzido)\n` +
+      `${p}contrato - Recebe um contrato de assassino (cooldown: 1h)\n` +
+      `${p}matar @pessoa - Tenta eliminar alvo (com ou sem contrato)\n` +
+      `${p}pagar_multa - Paga multa variável para sair da prisão\n` +
       `${p}pix <nome> <valor> - Transfere dinheiro para alguém\n` +
       `${p}saldo - Veja seu saldo\n\n` +
       `*Grupo*\n` +

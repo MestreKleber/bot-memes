@@ -3,6 +3,12 @@ const commands = require('./commands');
 const { verificarResposta } = require('./events');
 const { getPlayer, updateBalance } = require('./db');
 
+function calcularMultaPeloTempo(presoAte, now) {
+  const segundosRestantes = Math.max(0, presoAte - now);
+  const minutosRestantes = Math.max(1, Math.ceil(segundosRestantes / 60));
+  return minutosRestantes * 10;
+}
+
 module.exports = async (client, msg) => {
   if (!msg.from.endsWith('@g.us')) return;
 
@@ -32,22 +38,24 @@ module.exports = async (client, msg) => {
 
   const mortoAte = Number(player.morto_ate ?? 0);
   if (mortoAte > now) {
+    const segundos = Math.max(1, mortoAte - now);
     const minutos = Math.max(1, Math.ceil((mortoAte - now) / 60));
-    return msg.reply(`Você está morto. Aguarde ${minutos} minutos.`);
+    return msg.reply(`Você está morto. Aguarde ${minutos} minutos (${segundos}s).`);
   }
 
   const presoAte = Number(player.preso_ate ?? 0);
   if (presoAte > now && commandName !== 'pagar_multa') {
+    const multa = calcularMultaPeloTempo(presoAte, now);
     const minutos = Math.max(1, Math.ceil((presoAte - now) / 60));
     return msg.reply(
-      `Você está preso. Pague R$200 com !pagar_multa ou aguarde ${minutos} minutos.`
+      `Você está preso. Pague R$${multa} com !pagar_multa ou aguarde ${minutos} minutos.`
     );
   }
 
   const restricoes = {
     trabalhador: new Set(['roubar', 'matar']),
-    ladrao: new Set(['trabalhar']),
-    assassino: new Set(['trabalhar', 'roubar']),
+    ladrao: new Set(['matar', 'contrato']),
+    assassino: new Set(['roubar']),
   };
 
   if (restricoes[classe] && restricoes[classe].has(commandName)) {
